@@ -1,0 +1,449 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Coop Control Room & Qwen AI Copilot</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/mqtt/4.3.7/mqtt.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<style>
+  :root { 
+    --bg:#101412; 
+    --panel:#18201c; 
+    --line:#304037; 
+    --text:#edf3ed; 
+    --muted:#9aaa9d; 
+    --green:#87c96b; 
+    --yellow:#e7b85c; 
+    --red:#e87561; 
+    --blue:#7cb9d7; 
+  }
+  * { box-sizing:border-box; }
+  body { 
+    margin:0; 
+    padding:28px; 
+    min-height:100vh; 
+    color:var(--text); 
+    background:radial-gradient(circle at 85% 0%, #263a2b 0, var(--bg) 38%); 
+    font-family:Georgia, "Times New Roman", serif; 
+  }
+  .wrap { max-width:1180px; margin:auto; }
+  header { display:flex; justify-content:space-between; align-items:end; gap:20px; padding-bottom:22px; border-bottom:1px solid var(--line); }
+  h1 { margin:0; font-size:clamp(28px, 5vw, 46px); letter-spacing:.01em; font-weight:500; }
+  .kicker { color:var(--green); font:700 11px/1.2 ui-monospace, SFMono-Regular, Consolas, monospace; letter-spacing:.14em; text-transform:uppercase; margin-bottom:8px; }
+  .status { display:flex; align-items:center; gap:9px; color:var(--muted); font:13px ui-monospace, SFMono-Regular, Consolas, monospace; white-space:nowrap; }
+  .dot { width:10px; height:10px; border-radius:50%; background:var(--muted); }
+  .dot.on { background:var(--green); box-shadow:0 0 0 5px #87c96b22; }
+  .dot.off { background:var(--red); }
+  
+  .controls { display:grid; grid-template-columns:1.1fr 1.5fr auto; gap:10px; margin:22px 0; }
+  input, button { min-height:42px; padding:10px 13px; color:var(--text); background:var(--panel); border:1px solid var(--line); border-radius:3px; font:13px ui-monospace, SFMono-Regular, Consolas, monospace; }
+  button { cursor:pointer; color:#101412; background:var(--green); border-color:var(--green); font-weight:700; transition:all 0.2s; }
+  button:hover { background:#a8db8d; }
+  
+  /* QWEN AI COPILOT CARD STYLING */
+  .qwen-card { 
+    background:#18201ccc; 
+    border:1px solid var(--line); 
+    border-left:4px solid var(--green); 
+    padding:20px; 
+    margin-bottom:22px; 
+    position:relative; 
+    transition:border-color 0.3s ease; 
+  }
+  .qwen-card.WARNING { border-left-color:var(--yellow); }
+  .qwen-card.CRITICAL { border-left-color:var(--red); background:#221514cc; }
+  .qwen-header { display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; flex-wrap:wrap; gap:10px; }
+  .qwen-title { font-size:18px; font-weight:500; display:flex; align-items:center; gap:8px; }
+  .qwen-badge { font:700 10px ui-monospace, SFMono-Regular, Consolas, monospace; padding:3px 8px; border-radius:3px; letter-spacing:.1em; text-transform:uppercase; background:var(--line); color:var(--text); }
+  .qwen-badge.NORMAL { background:#28422d; color:var(--green); }
+  .qwen-badge.WARNING { background:#42361d; color:var(--yellow); }
+  .qwen-badge.CRITICAL { background:#421d1d; color:var(--red); }
+  .qwen-body { color:var(--text); font-size:15px; line-height:1.5; margin-bottom:15px; }
+  .qwen-actions { display:flex; gap:10px; flex-wrap:wrap; }
+  .qwen-btn { background:var(--panel); border:1px solid var(--line); color:var(--text); font-size:12px; padding:8px 14px; cursor:pointer; border-radius:3px; font-family:ui-monospace, SFMono-Regular, Consolas, monospace; }
+  .qwen-btn:hover { border-color:var(--green); color:var(--green); }
+  .qwen-btn.primary { background:var(--green); color:#101412; font-weight:700; border-color:var(--green); }
+  .qwen-btn.primary:hover { background:#a8db8d; }
+
+  .summary { display:grid; grid-template-columns:repeat(3, 1fr); gap:12px; margin-bottom:28px; }
+  .summary-item, .sensor-card, .chart-panel { background:#18201ccc; border:1px solid var(--line); }
+  .summary-item { padding:15px 17px; }
+  .summary-label, .group-title { color:var(--muted); font:11px ui-monospace, SFMono-Regular, Consolas, monospace; letter-spacing:.1em; text-transform:uppercase; }
+  .summary-value { display:block; margin-top:8px; font-size:23px; }
+  
+  .section { margin:28px 0 12px; display:flex; align-items:baseline; justify-content:space-between; gap:12px; }
+  h2 { margin:0; font-size:20px; font-weight:500; }
+  .group-title { color:var(--green); }
+  
+  .grid { display:grid; grid-template-columns:repeat(4, 1fr); gap:12px; }
+  .sensor-card { min-height:128px; padding:15px; position:relative; overflow:hidden; }
+  .sensor-card::after { content:""; position:absolute; width:72px; height:72px; right:-28px; bottom:-28px; border:1px solid #87c96b44; border-radius:50%; }
+  .sensor-name { color:var(--muted); font-size:14px; }
+  .sensor-value { display:block; margin:14px 0 4px; font:600 25px ui-monospace, SFMono-Regular, Consolas, monospace; }
+  .sensor-source { color:#718276; font:11px ui-monospace, SFMono-Regular, Consolas, monospace; }
+  .alert .sensor-value { color:var(--yellow); }
+  .critical .sensor-value { color:var(--red); }
+  .missing { opacity:.55; }
+  
+  .chart-panel { padding:18px; margin-top:30px; }
+  .chart-wrap { height:280px; }
+  .log { height:120px; overflow:auto; margin-top:12px; padding:12px; color:var(--muted); background:#0d110f; border:1px solid var(--line); font:11px/1.5 ui-monospace, SFMono-Regular, Consolas, monospace; }
+  .log div { white-space:pre-wrap; }
+  
+  @media (max-width:850px) { .grid { grid-template-columns:repeat(2, 1fr); } .controls { grid-template-columns:1fr 1fr; } .controls button { grid-column:span 2; } }
+  @media (max-width:560px) { body { padding:18px; } header { display:block; } .status { margin-top:14px; } .summary { grid-template-columns:1fr; } .grid { grid-template-columns:1fr 1fr; gap:8px; } .sensor-card { padding:12px; } .sensor-value { font-size:20px; } .controls { display:flex; flex-direction:column; } }
+</style>
+</head>
+<body>
+<main class="wrap">
+  <header>
+    <div>
+      <div class="kicker">Field telemetry / phase 01</div>
+      <h1>Coop control room</h1>
+    </div>
+    <div class="status">
+      <span class="dot" id="dot"></span>
+      <span id="statusText">Not connected</span>
+    </div>
+  </header>
+
+  <div class="controls">
+    <input id="broker" value="wss://broker.hivemq.com:8884/mqtt" aria-label="MQTT broker URL">
+    <input id="topic" value="iot/devices/+/telemetry" placeholder="iot/devices/+/telemetry" aria-label="MQTT telemetry topic filter">
+    <button id="connectBtn">Connect MQTT</button>
+  </div>
+
+  <!-- QWEN AI COPILOT MESSAGE CONTAINER -->
+  <section class="qwen-card NORMAL" id="qwenCard">
+    <div class="qwen-header">
+      <div class="qwen-title">🤖 Qwen AI Copilot Upkeep Agent</div>
+      <span class="qwen-badge NORMAL" id="qwenBadge">SYSTEM NOMINAL</span>
+    </div>
+    <div class="qwen-body" id="qwenBody">
+      Awaiting live telemetry and Qwen AI analysis feed from gateway...
+    </div>
+    <div class="qwen-actions" id="qwenActions">
+      <button class="qwen-btn" onclick="requestAiDiagnostic()">Request Manual AI Analysis</button>
+    </div>
+  </section>
+
+  <section class="summary">
+    <div class="summary-item"><span class="summary-label">Devices seen</span><strong class="summary-value" id="deviceCount">0</strong></div>
+    <div class="summary-item"><span class="summary-label">Last packet</span><strong class="summary-value" id="lastPacket">Waiting</strong></div>
+    <div class="summary-item"><span class="summary-label">Signal / battery</span><strong class="summary-value" id="health">--</strong></div>
+  </section>
+
+  <!-- NEW SECTION: ACOUSTIC & DISEASE DETECTION -->
+  <div class="section">
+    <h2>Acoustic & Respiratory Health</h2>
+    <span class="group-title">Newcastle Early Warning (TinyML / I2S)</span>
+  </div>
+  <section class="grid">
+    <article class="sensor-card" data-key="cough_count_10m">
+      <span class="sensor-name">Chicken Coughs (10m)</span>
+      <strong class="sensor-value">--</strong>
+      <span class="sensor-source">INMP441 + ESP32-S3 TinyML</span>
+    </article>
+    <article class="sensor-card" data-key="cough_confidence">
+      <span class="sensor-name">Model Confidence</span>
+      <strong class="sensor-value">--</strong>
+      <span class="sensor-source">Edge Impulse Classifier</span>
+    </article>
+    <article class="sensor-card" data-key="sound_db">
+      <span class="sensor-name">Ambient Sound</span>
+      <strong class="sensor-value">--</strong>
+      <span class="sensor-source">INMP441 / ICS-43434</span>
+    </article>
+    <article class="sensor-card" data-key="object_temperature_c">
+      <span class="sensor-name">Flock Head Temp</span>
+      <strong class="sensor-value">--</strong>
+      <span class="sensor-source">MLX90614 IR Probe</span>
+    </article>
+  </section>
+
+  <div class="section">
+    <h2>Environment</h2>
+    <span class="group-title">Air Quality & Microclimate</span>
+  </div>
+  <section class="grid">
+    <article class="sensor-card" data-key="air_temperature_c"><span class="sensor-name">Air temperature</span><strong class="sensor-value">--</strong><span class="sensor-source">SHT30 / SHT31</span></article>
+    <article class="sensor-card" data-key="humidity_percent"><span class="sensor-name">Humidity</span><strong class="sensor-value">--</strong><span class="sensor-source">SHT30 / SHT31</span></article>
+    <article class="sensor-card" data-key="ammonia_ppm"><span class="sensor-name">Ammonia (NH3)</span><strong class="sensor-value">--</strong><span class="sensor-source">MQ-137 / ZE03-NH3</span></article>
+    <article class="sensor-card" data-key="co2_ppm"><span class="sensor-name">Carbon dioxide</span><strong class="sensor-value">--</strong><span class="sensor-source">MH-Z19B / SCD30</span></article>
+    <article class="sensor-card" data-key="light_lux"><span class="sensor-name">Light Intensity</span><strong class="sensor-value">--</strong><span class="sensor-source">BH1750 / TEMT6000</span></article>
+  </section>
+
+  <div class="section">
+    <h2>Water and feed</h2>
+    <span class="group-title">Tank / dispenser monitoring</span>
+  </div>
+  <section class="grid">
+    <article class="sensor-card" data-key="water_level_percent"><span class="sensor-name">Tank level</span><strong class="sensor-value">--</strong><span class="sensor-source">JSN-SR04T</span></article>
+    <article class="sensor-card" data-key="water_low"><span class="sensor-name">Low-level switch</span><strong class="sensor-value">--</strong><span class="sensor-source">XKC-Y25-V</span></article>
+    <article class="sensor-card" data-key="water_flow_lpm"><span class="sensor-name">Water flow</span><strong class="sensor-value">--</strong><span class="sensor-source">YF-S201</span></article>
+    <article class="sensor-card" data-key="feed_mass_kg"><span class="sensor-name">Feed mass</span><strong class="sensor-value">--</strong><span class="sensor-source">HX711 + load cell</span></article>
+  </section>
+
+  <div class="section">
+    <h2>Activity & Node Telemetry</h2>
+    <span class="group-title">Motion & Gateway Status</span>
+  </div>
+  <section class="grid">
+    <article class="sensor-card" data-key="motion_events_10m"><span class="sensor-name">Flock Motion (10m)</span><strong class="sensor-value">--</strong><span class="sensor-source">HC-SR501 PIR</span></article>
+    <article class="sensor-card" data-key="motion"><span class="sensor-name">Instant Motion</span><strong class="sensor-value">--</strong><span class="sensor-source">HC-SR501 / RCWL-0516</span></article>
+    <article class="sensor-card" data-key="battery_percent"><span class="sensor-name">Battery</span><strong class="sensor-value">--</strong><span class="sensor-source">ESP32 ADC / power board</span></article>
+    <article class="sensor-card" data-key="rssi_dbm"><span class="sensor-name">Wi-Fi signal</span><strong class="sensor-value">--</strong><span class="sensor-source">ESP32 status</span></article>
+  </section>
+
+  <section class="chart-panel">
+    <div class="chart-wrap"><canvas id="chart"></canvas></div>
+    <div class="log" id="log"></div>
+  </section>
+</main>
+
+<script>
+let client = null;
+let currentDeviceId = 'coop-01';
+const MAX_POINTS = 60;
+const times = [], temps = [], hums = [], coughs = [], devices = new Map();
+
+const units = { 
+  air_temperature_c:'°C', humidity_percent:'%', co2_ppm:' ppm', ammonia_ppm:' ppm', 
+  light_lux:' lux', sound_db:' dB', water_level_percent:'%', water_flow_lpm:' L/min', 
+  feed_mass_kg:' kg', object_temperature_c:'°C', battery_percent:'%', rssi_dbm:' dBm',
+  cough_count_10m:' events', cough_confidence:'%', motion_events_10m:' pulses'
+};
+
+const decimals = { 
+  air_temperature_c:1, humidity_percent:1, co2_ppm:0, ammonia_ppm:1, light_lux:0, 
+  sound_db:1, water_level_percent:1, water_flow_lpm:2, feed_mass_kg:2, object_temperature_c:1, 
+  battery_percent:0, rssi_dbm:0, cough_count_10m:0, cough_confidence:1, motion_events_10m:0
+};
+
+// Chart Initialization
+const chart = new Chart(document.getElementById('chart').getContext('2d'), { 
+  type:'line', 
+  data:{ 
+    labels:times, 
+    datasets:[
+      { label:'Air temperature (°C)', data:temps, borderColor:'#e7b85c', tension:.3, pointRadius:0, borderWidth:2 },
+      { label:'Humidity (%)', data:hums, borderColor:'#7cb9d7', tension:.3, pointRadius:0, borderWidth:2 },
+      { label:'Cough Count (10m)', data:coughs, borderColor:'#e87561', tension:.3, pointRadius:0, borderWidth:2 }
+    ]
+  }, 
+  options:{ 
+    responsive:true, maintainAspectRatio:false, animation:false, 
+    interaction:{mode:'index', intersect:false}, 
+    scales:{ 
+      x:{ticks:{color:'#9aaa9d'}, grid:{color:'#304037'}}, 
+      y:{ticks:{color:'#e7b85c'}, grid:{color:'#304037'}} 
+    }, 
+    plugins:{legend:{labels:{color:'#edf3ed'}}} 
+  } 
+});
+
+function setStatus(state, text) { 
+  document.getElementById('dot').className = 'dot ' + state; 
+  document.getElementById('statusText').textContent = text; 
+}
+
+function log(text) { 
+  const el=document.getElementById('log'); 
+  const row=document.createElement('div'); 
+  row.textContent=text; 
+  el.appendChild(row); 
+  el.scrollTop=el.scrollHeight; 
+  while(el.children.length>80) el.firstChild.remove(); 
+}
+
+function displayValue(key, value) { 
+  if (value === null || value === undefined) return '--'; 
+  if (key === 'motion' || key === 'water_low') return value ? 'ACTIVE' : 'CLEAR'; 
+  if (typeof value === 'number') return value.toFixed(decimals[key] ?? 1) + (units[key] || ''); 
+  return String(value); 
+}
+
+function updateCards(readings) { 
+  document.querySelectorAll('[data-key]').forEach(card => { 
+    const key=card.dataset.key; 
+    const value=readings[key]; 
+    card.querySelector('.sensor-value').textContent=displayValue(key,value); 
+    card.classList.toggle('missing', value === undefined || value === null); 
+    card.classList.toggle('alert', 
+      (key === 'water_low' && value === true) || 
+      (key === 'ammonia_ppm' && value > 20) ||
+      (key === 'object_temperature_c' && value >= 41.2) ||
+      (key === 'cough_count_10m' && value >= 5) ||
+      (key === 'motion_events_10m' && value !== null && value !== undefined && value < 15)
+    ); 
+    card.classList.toggle('critical', 
+      (key === 'cough_count_10m' && value >= 12) || 
+      (key === 'object_temperature_c' && value >= 42.0) ||
+      (key === 'water_level_percent' && value < 15)
+    ); 
+  }); 
+}
+
+// HANDLE QWEN LLM INSIGHT PAYLOADS
+function renderQwenInsight(data) {
+  const qwenCard = document.getElementById('qwenCard');
+  const qwenBadge = document.getElementById('qwenBadge');
+  const qwenBody = document.getElementById('qwenBody');
+  const qwenActions = document.getElementById('qwenActions');
+
+  const threat = data.threat_level || 'NORMAL';
+  qwenCard.className = `qwen-card ${threat}`;
+  qwenBadge.className = `qwen-badge ${threat}`;
+  qwenBadge.textContent = threat === 'CRITICAL' ? '🔴 OUTBREAK RISK ALERT' : (threat === 'WARNING' ? '⚠️ UPKEEP NEEDED' : '🟢 SYSTEM NOMINAL');
+
+  const msg = data.message || {};
+  qwenBody.textContent = '';
+  const title = document.createElement('strong');
+  title.textContent = `${msg.title || 'System Status'}: `;
+  qwenBody.appendChild(title);
+  qwenBody.appendChild(document.createTextNode(msg.body || 'All coop conditions are within safe ranges.'));
+
+  qwenActions.innerHTML = '';
+  if (data.recommended_actions && data.recommended_actions.length > 0) {
+    data.recommended_actions.forEach(action => {
+      const btn = document.createElement('button');
+      btn.className = 'qwen-btn primary';
+      btn.textContent = action.label;
+      btn.onclick = () => publishMqttCommand(action.command, action.payload);
+      qwenActions.appendChild(btn);
+    });
+  } else {
+    qwenActions.innerHTML = '<button class="qwen-btn" onclick="requestAiDiagnostic()">Request Manual AI Analysis</button>';
+  }
+}
+
+function publishMqttCommand(command, payload) {
+  if (!client || !client.connected) {
+    alert('MQTT Client not connected');
+    return;
+  }
+  const allowedCommands = new Set(['notify_operator', 'identify', 'reset_baseline']);
+  if (!allowedCommands.has(command)) {
+    log('[COMMAND BLOCKED] Unsupported command: ' + command);
+    return;
+  }
+  const topic = `iot/devices/${currentDeviceId}/commands`;
+  const payloadStr = typeof payload === 'object' ? JSON.stringify(payload) : String(payload);
+  client.publish(topic, payloadStr);
+  log(`[COMMAND PUBLISHED] Topic: ${topic} | Payload: ${payloadStr}`);
+}
+
+function requestAiDiagnostic() {
+  if (!client || !client.connected) {
+    alert('MQTT Client not connected');
+    return;
+  }
+  const request = {
+    request_id: crypto.randomUUID ? crypto.randomUUID() : String(Date.now()),
+    device_id: currentDeviceId,
+    request: 'trigger_manual_analysis',
+    timestamp: new Date().toISOString()
+  };
+  client.publish(`iot/devices/${currentDeviceId}/ai/request`, JSON.stringify(request), { qos: 1 });
+  log('[AI REQUEST] Device: ' + currentDeviceId);
+}
+
+function handleMessage(topic, payload) { 
+  let message; 
+  try { 
+    message=JSON.parse(payload.toString()); 
+  } catch { 
+    log('Ignored non-JSON message on ' + topic); 
+    return; 
+  } 
+
+  // Check if this is an LLM insight message from Qwen
+  if (topic.includes('/ai/insights') || topic.includes('llm_insights') || message.llm_model || message.model) {
+    renderQwenInsight(message);
+    log(`[Qwen LLM Received] Threat: ${message.threat_level || 'NORMAL'} | ND Risk Score: ${message.nd_risk_score ?? '--'}`);
+    return;
+  }
+
+  // Check if this is a command acknowledgment
+  if (topic.endsWith('/commands/ack')) {
+    log(`[ACK Received] Device: ${message.device_id} | Command: ${message.command} | Status: ${message.status}`);
+    return;
+  }
+
+  // Handle standard sensor telemetry
+  const readings = message.readings || { 
+    air_temperature_c: message.temperature, 
+    humidity_percent: message.humidity,
+    ammonia_ppm: message.ammonia_ppm,
+    water_level_percent: message.water_level_pct,
+    cough_count_10m: message.cough_events_last_10min
+  }; 
+
+  const deviceId = message.device_id || message.sensor_id || topic.split('/')[2] || 'coop_node_01';
+  currentDeviceId = deviceId;
+  devices.set(deviceId, Date.now()); 
+  
+  document.getElementById('deviceCount').textContent=devices.size; 
+  document.getElementById('lastPacket').textContent=new Date().toLocaleTimeString(); 
+  document.getElementById('health').textContent=(message.rssi_dbm ?? '--') + ' dBm / ' + (message.battery_percent ?? '--') + '%'; 
+  
+  updateCards({...readings, battery_percent:message.battery_percent, rssi_dbm:message.rssi_dbm}); 
+
+  const time=new Date(message.timestamp || Date.now()).toLocaleTimeString(); 
+  times.push(time); 
+  temps.push(readings.air_temperature_c ?? null); 
+  hums.push(readings.humidity_percent ?? null); 
+  coughs.push(readings.cough_count_10m ?? null);
+
+  if(times.length > MAX_POINTS) {
+    times.shift(); temps.shift(); hums.shift(); coughs.shift();
+  } 
+  chart.update(); 
+  log('[' + time + '] ' + deviceId + ' | ' + Object.keys(readings).length + ' readings updated'); 
+}
+
+document.getElementById('connectBtn').addEventListener('click', () => { 
+  if(client) client.end(true); 
+  const url=document.getElementById('broker').value.trim(); 
+  const topic=document.getElementById('topic').value.trim(); 
+  
+  setStatus('', 'Connecting...'); 
+  log('Connecting to broker ' + url); 
+  
+  client=mqtt.connect(url, { clientId:'coop-dashboard-'+Math.random().toString(16).slice(2) }); 
+  
+  client.on('connect', () => { 
+    setStatus('on','Connected'); 
+    client.subscribe(topic, (error, granted) => {
+      if (error) {
+        log('Telemetry subscription error: ' + error.message);
+        return;
+      }
+      log('Subscribed to: ' + granted.map(item => item.topic).join(', '));
+    });
+    client.subscribe('iot/devices/+/ai/insights', (error, granted) => {
+      if (error) {
+        log('AI subscription error: ' + error.message);
+        return;
+      }
+      log('Subscribed to: ' + granted.map(item => item.topic).join(', '));
+    });
+  }); 
+    client.subscribe('iot/devices/+/commands/ack', (error, granted) => {
+      if (error) {
+        log('ACK subscription error: ' + error.message);
+        return;
+      }
+      log('Subscribed to: ' + granted.map(item => item.topic).join(', '));
+    });
+  
+  client.on('reconnect', () => setStatus('', 'Reconnecting...')); 
+  client.on('close', () => setStatus('off', 'Disconnected')); 
+  client.on('error', err => { setStatus('off','Error'); log('MQTT Error: '+err.message); });
+  client.on('offline', () => { setStatus('off', 'Offline'); log('MQTT client is offline'); });
+  client.on('message', handleMessage); 
+});
+</script>
+</body>
+</html>
