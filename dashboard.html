@@ -37,7 +37,8 @@
   .dot.off { background:var(--red); }
   
   .controls { display:grid; grid-template-columns:1.1fr 1.5fr auto; gap:10px; margin:22px 0; }
-  input, button { min-height:42px; padding:10px 13px; color:var(--text); background:var(--panel); border:1px solid var(--line); border-radius:3px; font:13px ui-monospace, SFMono-Regular, Consolas, monospace; }
+  .controls.devrow { grid-template-columns:1fr auto; margin:0 0 22px 0; }
+  input, button, select { min-height:42px; padding:10px 13px; color:var(--text); background:var(--panel); border:1px solid var(--line); border-radius:3px; font:13px ui-monospace, SFMono-Regular, Consolas, monospace; }
   button { cursor:pointer; color:#101412; background:var(--green); border-color:var(--green); font-weight:700; transition:all 0.2s; }
   button:hover { background:#a8db8d; }
   
@@ -112,6 +113,12 @@
     <input id="broker" value="wss://broker.hivemq.com:8884/mqtt" aria-label="MQTT broker URL">
     <input id="topic" value="iot/devices/+/telemetry" placeholder="iot/devices/+/telemetry" aria-label="MQTT telemetry topic filter">
     <button id="connectBtn">Connect MQTT</button>
+  </div>
+  <div class="controls devrow">
+    <select id="deviceSel" aria-label="Device to display">
+      <option value="__all__">All devices (raw)</option>
+    </select>
+    <button id="refreshDevBtn" title="Re-render selected device from buffer">Show device</button>
   </div>
 
   <!-- QWEN AI COPILOT MESSAGE CONTAINER -->
@@ -207,6 +214,51 @@ let client = null;
 let currentDeviceId = 'coop-01';
 const MAX_POINTS = 60;
 const times = [], temps = [], hums = [], coughs = [], devices = new Map();
+// Per-device series buffers: hist[deviceId] = {times:[], temps:[], hums:[], coughs:[], last:{}}
+const hist = new Map();
+function histFor(id) {
+  if (!hist.has(id)) hist.set(id, { times: [], temps: [], hums: [], coughs: [], last: null });
+  return hist.get(id);
+}
+function pushHist(id, t, temp, hum, cough, msg) {
+  const h = histFor(id);
+  h.times.push(t); h.temps.push(temp); h.hums.push(hum); h.coughs.push(cough);
+  if (h.times.length > MAX_POINTS) { h.times.shift(); h.temps.shift(); h.hums.shift(); h.coughs.shift(); }
+  h.last = msg;
+}
+// Which device feeds cards/chart/commands. '__all__' = legacy last-writer-wins.
+function selectedDevice() {
+  const el = document.getElementById('deviceSel');
+  return el ? el.value : '__all__';
+}
+function registerDeviceSel(id) {
+  const sel = document.getElementById('deviceSel');
+  if (!sel || sel.querySelector('option[value="' + id + '"]')) return;
+  const opt = document.createElement('option');
+  opt.value = id; opt.textContent = id;
+  sel.appendChild(opt);
+  log('New device seen: ' + id + ' (' + sel.options.length + ' total: ' +
+      Array.from(sel.options).map(o => o.value).filter(v => v !== '__all__').join(', ') + ')');
+}
+function renderDevice(selId) {
+  // Point shared chart arrays at the selected device's buffers (live refs).
+  if (selId === '__all__') {
+    chart.data.labels = times;
+    chart.data.datasets[0].data = temps;
+    chart.data.datasets[1].data = hums;
+    chart.data.datasets[2].data = coughs;
+    chart.update();
+    return;
+  }
+  const h = histFor(selId);
+  times.length = 0; temps.length = 0; hums.length = 0; coughs.length = 0;
+  h.times.forEach(v => times.push(v));
+  h.temps.forEach(v => temps.push(v));
+  h.hums.forEach(v => hums.push(v));
+  h.coughs.forEach(v => coughs.push(v));
+  chart.update();
+  if (h.last) updateCards({ ...h.last.readings, battery_percent: h.last.battery_percent, rssi_dbm: h.last.rssi_dbm });
+}
 
 const units = { 
   air_temperature_c:'°C', humidity_percent:'%', co2_ppm:' ppm', ammonia_ppm:' ppm', 
@@ -381,69 +433,80 @@ function handleMessage(topic, payload) {
   }; 
 
   const deviceId = message.device_id || message.sensor_id || topic.split('/')[2] || 'coop_node_01';
-  currentDeviceId = deviceId;
-  devices.set(deviceId, Date.now()); 
-  
-  document.getElementById('deviceCount').textContent=devices.size; 
-  document.getElementById('lastPacket').textContent=new Date().toLocaleTimeString(); 
-  document.getElementById('health').textContent=(message.rssi_dbm ?? '--') + ' dBm / ' + (message.battery_percent ?? '--') + '%'; 
-  
-  updateCards({...readings, battery_percent:message.battery_percent, rssi_dbm:message.rssi_dbm}); 
+  devices.set(deviceId, Date.now());
+  registerDeviceSel(deviceId);
 
-  const time=new Date(message.timestamp || Date.now()).toLocaleTimeString(); 
-  times.push(time); 
-  temps.push(readings.air_temperature_c ?? null); 
-  hums.push(readings.humidity_percent ?? null); 
-  coughs.push(readings.cough_count_10m ?? null);
+  document.getElementById('deviceCount').textContent=devices.size;
+  document.getElementById('lastPacket').textContent=new Date().toLocaleTimeString();
 
-  if(times.length > MAX_POINTS) {
-    times.shift(); temps.shift(); hums.shift(); coughs.shift();
-  } 
-  chart.update(); 
+  const time=new Date(message.timestamp || Date.now()).toLocaleTimeString();
+  const tv = readings.air_temperature_c ?? null;
+  const hv = readings.humidity_percent ?? null;
+  const cv = readings.cough_count_10m ?? null;
+  // Global series = raw feed (All devices mode). Per-device buffers feed the selector.
+  times.push(time); temps.push(tv); hums.push(hv); coughs.push(cv);
+  if(times.length > MAX_POINTS) { times.shift(); temps.shift(); hums.shift(); coughs.shift(); }
+  pushHist(deviceId, time, tv, hv, cv, message);
+
+  const sel = selectedDevice();
+  if (sel === '__all__' || sel === deviceId) {
+    currentDeviceId = deviceId;
+    document.getElementById('health').textContent=(message.rssi_dbm ?? '--') + ' dBm / ' + (message.battery_percent ?? '--') + '%';
+    updateCards({...readings, battery_percent:message.battery_percent, rssi_dbm:message.rssi_dbm});
+    chart.update();
+  } else {
+    chart.update(); // keep axes fresh; visible series re-renders on selection
+  }
   log('[' + time + '] ' + deviceId + ' | ' + Object.keys(readings).length + ' readings updated'); 
 }
 
-document.getElementById('connectBtn').addEventListener('click', () => { 
-  if(client) client.end(true); 
-  const url=document.getElementById('broker').value.trim(); 
-  const topic=document.getElementById('topic').value.trim(); 
-  
-  setStatus('', 'Connecting...'); 
-  log('Connecting to broker ' + url); 
-  
-  client=mqtt.connect(url, { clientId:'coop-dashboard-'+Math.random().toString(16).slice(2) }); 
-  
-  client.on('connect', () => { 
-    setStatus('on','Connected'); 
-    client.subscribe(topic, (error, granted) => {
-      if (error) {
-        log('Telemetry subscription error: ' + error.message);
-        return;
-      }
-      log('Subscribed to: ' + granted.map(item => item.topic).join(', '));
+let connectWatchdog = null;
+
+function connectBroker() {
+  if (typeof mqtt === 'undefined') {
+    log('MQTT library (mqtt.min.js from cdnjs) did not load — page is offline or the CDN is blocked. Cards cannot update until it loads.');
+    setStatus('off', 'CDN blocked');
+    return;
+  }
+  if (client) { try { client.end(true); } catch (e) { /* fresh start */ } }
+  clearTimeout(connectWatchdog);
+  var url = document.getElementById('broker').value.trim();
+  var topic = document.getElementById('topic').value.trim();
+  setStatus('', 'Connecting...');
+  log('Connecting to broker ' + url);
+  connectWatchdog = setTimeout(function () {
+    log('Still connecting after 12s — the WSS port :8884 may be blocked on this network. Try plain WebSocket instead: ws://broker.hivemq.com:8000/mqtt');
+    log('Also confirm something is publishing: run tools\\watch_topic.py in a second terminal.');
+  }, 12000);
+  var c;
+  try {
+    c = mqtt.connect(url, { clientId: 'coop-dashboard-' + Math.random().toString(16).slice(2), reconnectPeriod: 4000 });
+  } catch (err) {
+    log('Bad broker URL (' + (err && err.message ? err.message : err) + '). Expected e.g. wss://broker.hivemq.com:8884/mqtt');
+    setStatus('off', 'Bad URL');
+    return;
+  }
+  client = c;
+  client.on('connect', function () {
+    clearTimeout(connectWatchdog);
+    setStatus('on', 'Connected');
+    [topic, 'iot/devices/+/ai/insights', 'iot/devices/+/commands/ack'].forEach(function (t) {
+      client.subscribe(t, function (error, granted) {
+        if (error) { log('Subscription error on ' + t + ': ' + error.message); return; }
+        log('Subscribed to: ' + granted.map(function (g) { return g.topic; }).join(', '));
+      });
     });
-    client.subscribe('iot/devices/+/ai/insights', (error, granted) => {
-      if (error) {
-        log('AI subscription error: ' + error.message);
-        return;
-      }
-      log('Subscribed to: ' + granted.map(item => item.topic).join(', '));
-    });
-  }); 
-    client.subscribe('iot/devices/+/commands/ack', (error, granted) => {
-      if (error) {
-        log('ACK subscription error: ' + error.message);
-        return;
-      }
-      log('Subscribed to: ' + granted.map(item => item.topic).join(', '));
-    });
-  
-  client.on('reconnect', () => setStatus('', 'Reconnecting...')); 
-  client.on('close', () => setStatus('off', 'Disconnected')); 
-  client.on('error', err => { setStatus('off','Error'); log('MQTT Error: '+err.message); });
-  client.on('offline', () => { setStatus('off', 'Offline'); log('MQTT client is offline'); });
-  client.on('message', handleMessage); 
-});
+  });
+  client.on('reconnect', function () { setStatus('', 'Reconnecting...'); });
+  client.on('close', function () { setStatus('off', 'Disconnected'); });
+  client.on('error', function (err) { setStatus('off', 'Error'); log('MQTT Error: ' + err.message + ' — if this persists, the WSS port is likely blocked; try ws://broker.hivemq.com:8000/mqtt'); });
+  client.on('offline', function () { setStatus('off', 'Offline'); log('MQTT client is offline'); });
+  client.on('message', handleMessage);
+}
+
+document.getElementById('connectBtn').addEventListener('click', () => connectBroker());
+// Auto-connect on load: one click less. Watchdog names any failure.
+setTimeout(() => connectBroker(), 800);
 </script>
 </body>
 </html>

@@ -40,3 +40,15 @@ desktop.ini
 # Logs / local data
 # ---------------------------------------------------------------------------
 *.log
+
+# ---------------------------------------------------------------------------
+# Generated data (logs, snapshots) — regenerable, too large for the repo
+# ---------------------------------------------------------------------------
+vision/track_logs.csv
+audio/event_logs.csv
+audio/snapshots/
+vision/snapshots/
+*.wav
+*.jpg
+*.out
+*.err

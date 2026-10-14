@@ -1,0 +1,9 @@
+# Training baseline deps (Track A: MFCC + RandomForest, before sensors arrive).
+# librosa + scikit-learn pull scipy (~40 MB total) — small enough for slow
+# links, KEEP --default-timeout=300 on flaky networks.
+librosa==0.11.0      # verified 2026-10-13: TRAIN_SELFTEST_OK (64 synth clips)
+scikit-learn==1.7.2  # verified 2026-10-13: GroupKFold splits + RF export
+scipy==1.16.3
+numpy>=1.24,<3
+# MQTT (gateway + sim_node + bridges need this IN the venv):
+paho-mqtt>=2.1,<3

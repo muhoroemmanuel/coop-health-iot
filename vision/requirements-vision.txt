@@ -1,0 +1,9 @@
+opencv-python==4.14.0.94  # verified 2026-10-13: installs clean, NumPy 2.x compatible
+numpy>=1.24,<3  # NOTE: numpy 2.5.4 present in venv — opencv 4.14.x wheels support NumPy 2.
+# Do NOT pin numpy<2 (would force a re-download on a slow link for zero benefit).
+# Optional — high-accuracy detection + ByteTrack (install when ready):
+# ultralytics>=8.2
+# supervision>=0.22
+# Optional — publish vision JSON to same MQTT broker as gateway.py:
+# paho-mqtt>=2.1,<3
+

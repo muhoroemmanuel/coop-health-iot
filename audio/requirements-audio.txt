@@ -1,0 +1,4 @@
+sounddevice==0.5.2  # verified 2026-10-13: bundles PortAudio on Windows, no build step
+numpy>=1.24,<3
+# Optional — publish cough/sound telemetry to same MQTT broker as gateway.py:
+# paho-mqtt>=2.1,<3
